@@ -6,11 +6,11 @@ from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
-app = Flask(name)
+app = Flask(__name__)
 
 HTML = """
-
-<!DOCTYPE html><html>
+<!DOCTYPE html>
+<html>
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Vicky Secure Cipher Tool</title>
@@ -62,140 +62,153 @@ HTML = """
             overflow-wrap: anywhere;
             white-space: pre-wrap;
         }
-        .error {
-            color: #b00020;
-        }
         .note {
             font-size: 13px;
             color: #555;
         }
     </style>
 </head>
-<body><h2>VICKY SECURE CIPHER TOOL</h2>
-<p style="text-align:center">
-    Encrypt and decrypt messages using a passcode.
-</p>
+<body>
+    <h2>VICKY SECURE CIPHER TOOL</h2>
 
-<div class="card">
-    <h3>Encrypt Message</h3>
-    <form method="POST" action="/encrypt-web">
-        <label>Enter your message:</label>
-        <textarea name="message" rows="4" required>{{ enc_msg }}</textarea>
+    <p style="text-align:center">
+        Encrypt and decrypt messages using a passcode.
+    </p>
 
-        <label>Create a passcode:</label>
-        <input type="password" name="passcode"
-               minlength="8" required
-               autocomplete="new-password">
+    <div class="card">
+        <h3>Encrypt Message</h3>
 
-        <button type="submit">Encrypt Message</button>
-    </form>
+        <form method="POST" action="/encrypt-web">
+            <label>Enter your message:</label>
+            <textarea name="message" rows="4" required>{{ enc_msg }}</textarea>
 
-    {% if enc_result %}
-        <h4>Encrypted Result</h4>
-        <div class="result">{{ enc_result }}</div>
-    {% endif %}
-</div>
+            <label>Create a passcode (at least 8 characters):</label>
+            <input type="password" name="passcode"
+                   minlength="8" required
+                   autocomplete="new-password">
 
-<div class="card">
-    <h3>Decrypt Message</h3>
-    <form method="POST" action="/decrypt-web">
-        <label>Enter ciphertext:</label>
-        <textarea name="ciphertext" rows="4" required>{{ dec_cipher }}</textarea>
+            <button type="submit">Encrypt Message</button>
+        </form>
 
-        <label>Enter the same passcode:</label>
-        <input type="password" name="passcode"
-               required autocomplete="current-password">
+        {% if enc_result %}
+            <h4>Encrypted Result</h4>
+            <div class="result">{{ enc_result }}</div>
+        {% endif %}
+    </div>
 
-        <button type="submit">Decrypt Message</button>
-    </form>
+    <div class="card">
+        <h3>Decrypt Message</h3>
 
-    {% if dec_result %}
-        <h4>Decryption Result</h4>
-        <div class="result">{{ dec_result }}</div>
-    {% endif %}
-</div>
+        <form method="POST" action="/decrypt-web">
+            <label>Enter ciphertext:</label>
+            <textarea name="ciphertext" rows="4" required>{{ dec_cipher }}</textarea>
 
-<p class="note">
-    Keep your passcode safe. The original message cannot be recovered
-    without the correct passcode.
-</p>
+            <label>Enter the same passcode:</label>
+            <input type="password" name="passcode"
+                   required autocomplete="current-password">
 
+            <button type="submit">Decrypt Message</button>
+        </form>
+
+        {% if dec_result %}
+            <h4>Decryption Result</h4>
+            <div class="result">{{ dec_result }}</div>
+        {% endif %}
+    </div>
+
+    <p class="note">
+        Keep your passcode safe. You need the correct passcode
+        to recover your original message.
+    </p>
 </body>
 </html>
-"""def derive_key(passcode, salt):
-kdf = PBKDF2HMAC(
-algorithm=hashes.SHA256(),
-length=32,
-salt=salt,
-iterations=600000,
-)
+"""
 
-key = kdf.derive(passcode.encode("utf-8"))
-return base64.urlsafe_b64encode(key)
+
+def derive_key(passcode, salt):
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=600000,
+    )
+
+    key = kdf.derive(passcode.encode("utf-8"))
+    return base64.urlsafe_b64encode(key)
+
 
 @app.route("/")
 def home():
-return render_template_string(HTML)
+    return render_template_string(HTML)
+
 
 @app.route("/encrypt-web", methods=["POST"])
 def encrypt_web():
-message = request.form.get("message", "")
-passcode = request.form.get("passcode", "")
+    message = request.form.get("message", "")
+    passcode = request.form.get("passcode", "")
 
-if not message or len(passcode) < 8:
+    if not message or len(passcode) < 8:
+        return render_template_string(
+            HTML,
+            enc_msg=message,
+            enc_result="Enter a message and a passcode of at least 8 characters."
+        ), 400
+
+    salt = os.urandom(16)
+    key = derive_key(passcode, salt)
+
+    ciphertext = Fernet(key).encrypt(message.encode("utf-8"))
+
+    # Combine the version marker, salt, and ciphertext.
+    result = base64.urlsafe_b64encode(
+        b"VSM1" + salt + ciphertext
+    ).decode("ascii")
+
     return render_template_string(
         HTML,
         enc_msg=message,
-        enc_result="Enter a message and a passcode of at least 8 characters."
-    ), 400
+        enc_result=result
+    )
 
-salt = os.urandom(16)
-key = derive_key(passcode, salt)
-
-ciphertext = Fernet(key).encrypt(message.encode("utf-8"))
-
-# Store the salt with the ciphertext so it can be recovered for decryption.
-result = base64.urlsafe_b64encode(
-    b"VSM1" + salt + ciphertext
-).decode("ascii")
-
-return render_template_string(
-    HTML,
-    enc_msg=message,
-    enc_result=result
-)
 
 @app.route("/decrypt-web", methods=["POST"])
 def decrypt_web():
-ciphertext = request.form.get("ciphertext", "").strip()
-passcode = request.form.get("passcode", "")
+    ciphertext = request.form.get("ciphertext", "").strip()
+    passcode = request.form.get("passcode", "")
 
-try:
-    raw = base64.b64decode(ciphertext, validate=True)
+    try:
+        # URL-safe Base64 is used by the encryption function.
+        raw = base64.b64decode(
+            ciphertext,
+            altchars=b"-_",
+            validate=True
+        )
 
-    if not raw.startswith(b"VSM1") or len(raw) < 21:
-        raise ValueError("Invalid format")
+        if not raw.startswith(b"VSM1") or len(raw) < 21:
+            raise ValueError("Invalid ciphertext format")
 
-    salt = raw[4:20]
-    encrypted_data = raw[20:]
+        salt = raw[4:20]
+        encrypted_data = raw[20:]
 
-    key = derive_key(passcode, salt)
-    original_message = Fernet(key).decrypt(
-        encrypted_data
-    ).decode("utf-8")
+        key = derive_key(passcode, salt)
 
-    return render_template_string(
-        HTML,
-        dec_cipher=ciphertext,
-        dec_result=original_message
-    )
+        original_message = Fernet(key).decrypt(
+            encrypted_data
+        ).decode("utf-8")
 
-except (ValueError, InvalidToken, UnicodeDecodeError):
-    return render_template_string(
-        HTML,
-        dec_cipher=ciphertext,
-        dec_result="Decryption failed. Check your ciphertext and passcode."
-    ), 400
+        return render_template_string(
+            HTML,
+            dec_cipher=ciphertext,
+            dec_result=original_message
+        )
 
-if name == "main":
-app.run(host="0.0.0.0", port=5000, debug=False)
+    except (ValueError, InvalidToken, UnicodeDecodeError):
+        return render_template_string(
+            HTML,
+            dec_cipher=ciphertext,
+            dec_result="Decryption failed. Check your ciphertext and passcode."
+        ), 400
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=False)
